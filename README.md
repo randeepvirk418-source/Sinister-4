@@ -10,15 +10,23 @@ Made by **Mr Deadron**.
 
 ## Quick start
 
-Download `index.html` and open it in a current browser. That's it. There are no packages to install, no build step, and no server to run. The app works offline, including its word lists, generator, and simulations.
+For the full app with its backend, install Node.js 22 or newer, open this repository's folder, and run:
 
-If your browser limits clipboard access for local files, you can serve the same file:
+```sh
+node server.js
+```
+
+Open `http://localhost:3000/`. There are no packages to install and no build step. The server serves the page and its API from the same address.
+
+For a standalone demo, you can still open `index.html` directly. Analysis, word lists, generation, and simulations work offline. Online breach checking is optional.
+
+If you only want a static preview, you can also serve the frontend alone:
 
 ```sh
 python3 -m http.server 8000
 ```
 
-Then open `http://localhost:8000/`. To deploy it, drop the folder containing `index.html` onto a static host such as Netlify.
+Then open `http://localhost:8000/`. For the full backend, use the Node command above. See [DEPLOY.md](DEPLOY.md) for the exact Render setup. Netlify Drop hosts the static file; it does not run `server.js`.
 
 Add `?selftest=1` to the page address to run the built-in checks. For example, use `http://localhost:8000/?selftest=1` when serving it locally.
 
@@ -27,14 +35,14 @@ Add `?selftest=1` to the page address to run the built-in checks. For example, u
 - Live strength score, naive entropy, and a pattern-aware estimate.
 - Token chips showing the words, years, suffixes, and other shortcuts an attacker might notice.
 - Three live crack-time estimates below the strength meter, plus a detailed attack-scenario table.
-- A local common-password check. No online breach lookup.
+- A local common-password check and optional prefix-only online breach lookup.
 - Secure random character passwords and passphrases, generated with `crypto.getRandomValues`.
 - Specific improvement tips and a stronger-passphrase comparison that leaves your input alone.
 - A short visual attack simulation, demo presets, and a guided demo.
 - Green, amber, and cyan terminal themes, a phone layout, and reduced-motion support.
 - Password-free reports and a panic wipe button.
 
-Everything runs in one HTML file. The attack animation only illustrates the math; it does not try passwords, crack hashes, or contact another system.
+The frontend stays in one HTML file. The optional Node backend serves it, exposes public settings and health checks, and proxies five-character breach prefixes. The attack animation only illustrates the math; it does not try passwords, crack hashes, or contact another system.
 
 ## How it works
 
@@ -105,17 +113,50 @@ The 20-character row assumes roughly 131 bits for randomly selected mixed charac
 
 **These are estimates, not predictions.** Real attackers order guesses unevenly and may know things this model does not. A site's rate limits and password hashing settings matter a lot. The detailed simulator has separate algorithm and hardware assumptions; its controls do not change these three fixed comparison rates. All rates are editable in `CONFIG` inside `index.html`.
 
+The detailed simulator uses separate assumptions for one high-end consumer GPU:
+
+| Scenario | Guesses per second |
+| --- | ---: |
+| Online, rate limited | 100 per hour |
+| Online, no rate limit | 1,000 |
+| MD5 | 150 billion |
+| NTLM | 250 billion |
+| SHA-1 | 49 billion |
+| SHA-256 | 21 billion |
+| bcrypt, cost 12 | 1,400 |
+| Argon2id | 100, explicitly an assumption |
+
+The GPU figures are rounded estimates informed by public RTX 4090 hashcat benchmarks, not measurements made here. Bcrypt's cost and Argon2id's memory/time settings matter. Hardware options multiply only offline rows by 1, 8, or 1,000. Rates from the backend are public configuration, never measurements of the visitor's hardware.
+
+## Backend and hosting
+
+Keep `server.js`, `index.html`, `package.json`, and `render.yaml` at the repository root. The tests live in `tests/`. The backend uses Node's built-in modules and has no runtime dependencies.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/health` | A small health response for the host and manual checks |
+| `GET /api/config` | Public attack speeds and settings; the frontend uses these when available |
+| `GET /api/breach/ABCDE` | Fetch the padded SHA-1 suffix range for one five-character hex prefix |
+
+The server has no password-analysis endpoint, database, login system, or password storage. Those would not improve this project: the sensitive calculations belong in the browser. It rejects request bodies, query parameters, full hashes, and malformed prefixes. The breach proxy has an upstream timeout, bounded concurrency, and an in-memory rate limit. Rate limits are local to one running server; on a shared hosting proxy, multiple users may share a limit.
+
+For the quickest full deployment, connect this GitHub repository to a **Render Node Web Service**. Build command: `node --check server.js`. Start command: `node server.js`. Health path: `/api/health`. Render supplies the port and HTTPS address. No database or API key is needed. [DEPLOY.md](DEPLOY.md) walks through the buttons and the included Blueprint option.
+
 ## Privacy
 
-Your password is not sent anywhere. This version makes **no network calls**. It has no analytics, remote fonts, CDN scripts, or online breach API. Its Content Security Policy also sets `connect-src 'none'`.
+Your password, its full hash, and the analysis stay in your browser. There are no remote fonts, CDN scripts, analytics, or password uploads. Only the non-secret color-theme preference may be stored.
 
-The common-password check uses an embedded list. It can say that a value is known or common; it cannot tell you whether an arbitrary password has appeared in a recent breach. Not appearing in that list does not mean safe.
+The optional online breach check is on by default. After a 600 ms pause in typing, the browser computes SHA-1 locally and sends **only the first five hexadecimal characters**. It compares the returned suffixes locally. When the Node backend is detected, the browser requests `/api/breach/PREFIX`; the server forwards that prefix to `https://api.pwnedpasswords.com/range/PREFIX` with `Add-Padding: true`. In standalone/static mode, the browser uses the same public API directly. The inspector shows which route was used, the exact application request, and the number of non-padding results.
 
-Passwords are not written to cookies, URLs, localStorage, or a backend. They do exist temporarily in the input, displayed token chips, and JavaScript memory while you use the app. Only the non-secret color-theme preference may be saved.
+The backend and breach provider can observe a hash prefix, timing, and network metadata. A prefix is less revealing than a password or full hash, but it is not information-free. This app does not log requests or store lookup ranges; a hosting provider can have its own access logs. The server temporarily tracks connection IPs for rate limiting. SHA-1 is used for this lookup protocol, not recommended for password storage.
 
-Copying is an explicit exception: pressing COPY puts that value on your system clipboard. The app attempts to clear sensitive copies after 30 seconds. Browser permissions, focus, clipboard history, and other applications can prevent reliable clearing. COPY REPORT omits the password and its token text.
+Turning the online check off keeps password checks local. Inputs shorter than four code points skip online checks. Offline, disabled, failed, or timed-out lookups use the embedded common-password list; they are never presented as a successful online search. A local match says common/public, not proof of a particular breach. NOT FOUND does not mean safe. The UI's “FOUND IN N BREACHES” label displays exposure occurrences, not necessarily N separate incidents.
 
-PANIC WIPE clears the input, analysis results, generator output, and comparison, and stops active animations and demos. The page also wipes on `pagehide`. This clears visible values and working references; JavaScript cannot promise forensic erasure from browser or operating-system memory. It also cannot erase screenshots, clipboard history, or data already read by an extension.
+When served over HTTP(S), the frontend also requests the backend's public configuration. That request contains no password data. The Content Security Policy permits connections only to the current origin and the breach API. Analysis and generation still work without either service.
+
+Passwords are not written to cookies, URLs, localStorage, or the backend. They do exist temporarily in the input, displayed token chips, and JavaScript memory while you use the app. Pressing COPY intentionally puts a value on your system clipboard. Sensitive copies are cleared after 30 seconds where browser permissions allow; focus, permissions, clipboard history, and other applications can prevent reliable clearing. COPY REPORT omits the password and its token text.
+
+PANIC WIPE clears the input, results, generator output, and comparison, cancels pending requests, and stops animations and demos. The page also wipes on `pagehide`. This clears visible values and working references; JavaScript cannot promise forensic erasure from browser memory, screenshots, extensions, or clipboard history.
 
 ## Assumptions and limitations
 
@@ -131,7 +172,7 @@ PANIC WIPE clears the input, analysis results, generator output, and comparison,
 
 Issues and pull requests are welcome. A clear example of a missed pattern, confusing explanation, or browser problem is useful. Please use made-up or public sample passwords in reports, never a real secret.
 
-Keep the app dependency-free and contained in `index.html`. Keep the engine functions pure, preserve the offline privacy model, and update the built-in self-tests when changing the math. Before opening a pull request, run `?selftest=1`, try the demo passwords, check a 390px-wide layout, and confirm the page makes no network requests. If a change affects a time estimate, include the bits, rate, and expected result so someone else can check it.
+Keep the frontend dependency-free and contained in `index.html`; the optional Node service stays in `server.js`. Keep the engine functions pure, preserve client-side password processing, and update the built-in self-tests when changing the math. Run `node --test tests/*.test.js` for the backend and breach client; those tests use controlled upstream responses and need no API credentials. Before opening a pull request, run `?selftest=1`, try the demo passwords, check a 390px-wide layout, and inspect network traffic to confirm only public configuration and five-character breach prefixes are sent. Check the online-disabled and offline paths too. If a change affects a time estimate, include the bits, rate, and expected result so someone else can check it.
 
 ## License
 
